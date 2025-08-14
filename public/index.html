@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <title>Grupo 2 - Temperatura en tiempo real</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; padding: 24px; max-width: 900px; margin: 0 auto; }
+    .row { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+    .value { font-size: 2rem; font-weight: 700; }
+    .led { width: 22px; height: 22px; border-radius: 50%; background: #888; display: inline-block; box-shadow: inset 0 0 2px #000; }
+    .led.on { background: #e53935; box-shadow: 0 0 10px #e53935; }
+    .alert { color: #e53935; font-weight: 600; display: none; }
+    .alert.on { display: inline; }
+    input[type=range] { width: 320px; }
+    small { color: #666; }
+    .chart-container { 
+      position: relative; 
+      height: 400px; 
+      background: #fff; 
+      border: 1px solid #ddd; 
+      border-radius: 8px; 
+      padding: 8px; 
+      overflow-x: auto;
+    }
+    canvas { 
+      width: 100% !important;
+      height: 100% !important;
+    }
+  </style>
+</head>
+<body>
+  <h1>Temperatura en tiempo real</h1>
+
+  <div class="row">
+    <span>Temperatura actual:</span>
+    <span id="temp" class="value">--.- °C</span>
+  </div>
+
+  <div class="row">
+    <span>Umbral (°C):</span>
+    <input id="thr" type="range" min="0" max="50" step="0.5" value="30">
+    <span id="thrVal">30.0 °C</span>
+  </div>
+  <small>La app compara y publica el comando MQTT del LED cuando la temperatura cruza el umbral.</small>
+
+  <div class="row" style="margin-top:16px;">
+    <span>LED de alarma:</span>
+    <span id="led" class="led" title="LED virtual"></span>
+    <p id="alertText" class="alert" style="margin:0;">¡ALERTA! Umbral superado.</p>
+  </div>
+
+  <h3>Gráfica (últimas 2 horas)</h3>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <!-- Chart.js con adaptador de fechas -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const tempEl = document.getElementById("temp");
+    const ledEl = document.getElementById("led");
+    const alertEl = document.getElementById("alertText");
+    const thr = document.getElementById("thr");
+    const thrVal = document.getElementById("thrVal");
+    const chartEl = document.getElementById("chart");
+
+    // --- Chart.js configurado correctamente ---
+    const data = {
+      datasets: [
+        { 
+          label: "Temperatura (°C)", 
+          data: [], 
+          borderColor: "#2196F3", // Azul
+          backgroundColor: "rgba(33, 150, 243, 0.1)",
+          borderWidth: 2, 
+          tension: 0.1,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          fill: false
+        },
+        { 
+          label: "Umbral (°C)", 
+          data: [], 
+          borderColor: "#e53935", // Rojo
+          backgroundColor: "rgba(229, 57, 53, 0.1)",
+          borderWidth: 2, 
+          pointRadius: 0,
+          borderDash: [5, 5], // Línea punteada
+          fill: false
+        }
+      ]
+    };
+
+    const chart = new Chart(chartEl, {
+      type: "line",
+      data,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 0 // Sin animación para tiempo real
+        },
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: {
+              unit: "minute",
+              displayFormats: {
+                minute: "HH:mm",
+                hour: "HH:mm"
+              },
+              tooltipFormat: "yyyy-MM-dd HH:mm:ss"
+            },
+            title: {
+              display: true,
+              text: "Tiempo"
+            },
+            ticks: {
+              maxRotation: 45,
+              source: 'auto',
+              autoSkip: true,
+              maxTicksLimit: 10
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: "Temperatura (°C)"
+            },
+            min: 0,
+            max: 50,
+            ticks: {
+              stepSize: 10, // Escalas de 10 en 10
+              callback: function(value) {
+                return value + "°C";
+              }
+            },
+            grid: {
+              color: "rgba(0,0,0,0.1)"
+            }
+          }
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top'
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+            callbacks: {
+              label: function(context) {
+                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '°C';
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Función para agregar punto de temperatura
+    function addTemperaturePoint(timestamp, temperature) {
+      const time = new Date(timestamp);
+      const currentThreshold = parseFloat(thr.value);
+      
+      // Agregar punto de temperatura
+      data.datasets[0].data.push({
+        x: time,
+        y: temperature
+      });
+      
+      // Agregar punto de umbral (misma hora)
+      data.datasets[1].data.push({
+        x: time,
+        y: currentThreshold
+      });
+      
+      // Mantener solo últimas 2 horas (120 puntos si es cada minuto)
+      if (data.datasets[0].data.length > 120) {
+        data.datasets[0].data.shift();
+        data.datasets[1].data.shift();
+      }
+      
+      chart.update('none'); // Sin animación para tiempo real
+    }
+
+    // Función para actualizar umbral en toda la línea
+    function updateThresholdLine(newThreshold) {
+      data.datasets[1].data.forEach(point => {
+        point.y = newThreshold;
+      });
+      chart.update('none');
+    }
+
+    // Umbral UI -> server
+    thr.addEventListener("input", () => {
+      const v = parseFloat(thr.value);
+      thrVal.textContent = v.toFixed(1) + " °C";
+      updateThresholdLine(v); // Actualizar línea roja inmediatamente
+      socket.emit("set_threshold", v);
+    });
+
+    // Server -> UI: umbral actual
+    socket.on("threshold", (v) => {
+      thr.value = v;
+      thrVal.textContent = parseFloat(v).toFixed(1) + " °C";
+      updateThresholdLine(parseFloat(v));
+    });
+
+    // Cargar historial inicial (2 horas)
+    fetch("/api/history?minutes=120")
+      .then(r => r.json())
+      .then(rows => {
+        console.log("Historial cargado:", rows.length, "registros");
+        rows.forEach(row => {
+          if (row.temp !== undefined && row.temp !== null) {
+            addTemperaturePoint(row.ts, parseFloat(row.temp));
+          }
+        });
+      })
+      .catch(err => console.error("Error cargando historial:", err));
+
+    // Tiempo real - Nueva temperatura
+    socket.on("temp", (t) => {
+      const num = parseFloat(t);
+      if (!isNaN(num)) {
+        console.log("Nueva temperatura:", num, "°C");
+        tempEl.textContent = num.toFixed(1) + " °C";
+        addTemperaturePoint(new Date(), num);
+      }
+    });
+
+    // Estado del LED
+    socket.on("led", (on) => {
+      const isOn = (on === 1 || on === "1" || on === true);
+      ledEl.classList.toggle("on", isOn);
+      alertEl.classList.toggle("on", isOn);
+      console.log("LED:", isOn ? "ON" : "OFF");
+    });
+
+    // Debug de conexión
+    socket.on("connect", () => {
+      console.log("Socket.IO conectado");
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Socket.IO desconectado");
+    });
+  </script>
+</body>
+</html>

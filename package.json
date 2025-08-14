@@ -1,0 +1,16 @@
+{
+  "name": "grupo2-proyecto",
+  "version": "1.1.0",
+  "description": "LM35 + MQTT + Socket.IO + remote threshold",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1",
+    "express": "^4.19.2",
+    "mongoose": "^8.5.0",
+    "mqtt": "^5.3.4",
+    "socket.io": "^4.7.5"
+  }
+}
